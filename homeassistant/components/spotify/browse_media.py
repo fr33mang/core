@@ -14,7 +14,7 @@ from spotifyaio import (
     SpotifyClient,
     Track,
 )
-from spotifyaio.models import Episode, ItemType, SimplifiedEpisode
+from spotifyaio.models import Episode, ItemType, SearchType, SimplifiedEpisode
 import yarl
 
 from homeassistant.components.media_player import (
@@ -22,6 +22,8 @@ from homeassistant.components.media_player import (
     BrowseMedia,
     MediaClass,
     MediaType,
+    SearchMedia,
+    SearchMediaQuery,
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -459,6 +461,101 @@ def item_payload(item: ItemPayload, *, can_play_artist: bool) -> BrowseMedia:
         title=item["name"],
         thumbnail=item["thumbnail"],
     )
+
+
+async def async_search_media(
+    spotify: SpotifyClient,
+    query: SearchMediaQuery,
+    *,
+    can_play_artist: bool = True,
+) -> SearchMedia:
+    """Search Spotify media."""
+    type_map: dict[MediaType | str, list[SearchType]] = {
+        MediaType.TRACK: [SearchType.TRACK],
+        MediaType.ALBUM: [SearchType.ALBUM],
+        MediaType.ARTIST: [SearchType.ARTIST],
+        MediaType.PLAYLIST: [SearchType.PLAYLIST],
+        MediaType.EPISODE: [SearchType.EPISODE],
+        MEDIA_TYPE_SHOW: [SearchType.SHOW],
+    }
+
+    if query.media_content_type and query.media_content_type in type_map:
+        search_types = type_map[query.media_content_type]
+    else:
+        search_types = [
+            SearchType.TRACK,
+            SearchType.ALBUM,
+            SearchType.ARTIST,
+            SearchType.PLAYLIST,
+        ]
+
+    results = await spotify.search(query.search_query, search_types)
+
+    children: list[BrowseMedia] = []
+
+    if results.tracks:
+        for track in results.tracks:
+            try:
+                children.append(
+                    item_payload(_get_track_item_payload(track), can_play_artist=False)
+                )
+            except MissingMediaInformation, UnknownMediaType:
+                continue
+
+    if results.albums:
+        for album in results.albums:
+            try:
+                children.append(
+                    item_payload(
+                        _get_album_item_payload(album), can_play_artist=False
+                    )
+                )
+            except MissingMediaInformation, UnknownMediaType:
+                continue
+
+    if results.artists:
+        for artist in results.artists:
+            try:
+                children.append(
+                    item_payload(
+                        {
+                            "id": artist.artist_id,
+                            "name": artist.name,
+                            "type": MediaType.ARTIST,
+                            "uri": artist.uri,
+                            "thumbnail": fetch_image_url(artist.images)
+                            if isinstance(artist, Artist)
+                            else None,
+                        },
+                        can_play_artist=can_play_artist,
+                    )
+                )
+            except MissingMediaInformation, UnknownMediaType:
+                continue
+
+    if results.playlists:
+        for playlist in results.playlists:
+            try:
+                children.append(
+                    item_payload(
+                        _get_playlist_item_payload(playlist), can_play_artist=False
+                    )
+                )
+            except MissingMediaInformation, UnknownMediaType:
+                continue
+
+    if results.episodes:
+        for episode in results.episodes:
+            try:
+                children.append(
+                    item_payload(
+                        _get_episode_item_payload(episode), can_play_artist=False
+                    )
+                )
+            except MissingMediaInformation, UnknownMediaType:
+                continue
+
+    return SearchMedia(result=children)
 
 
 async def library_payload(*, can_play_artist: bool) -> BrowseMedia:
