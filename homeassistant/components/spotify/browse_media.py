@@ -420,7 +420,7 @@ async def build_item_response(  # noqa: C901
             browse_media.children.append(
                 item_payload(item, can_play_artist=can_play_artist)
             )
-        except MissingMediaInformation, UnknownMediaType:
+        except (MissingMediaInformation, UnknownMediaType):
             continue
 
     return browse_media
@@ -499,7 +499,7 @@ async def async_search_media(
                 children.append(
                     item_payload(_get_track_item_payload(track), can_play_artist=False)
                 )
-            except MissingMediaInformation, UnknownMediaType:
+            except (MissingMediaInformation, UnknownMediaType):
                 continue
 
     if results.albums:
@@ -510,7 +510,7 @@ async def async_search_media(
                         _get_album_item_payload(album), can_play_artist=False
                     )
                 )
-            except MissingMediaInformation, UnknownMediaType:
+            except (MissingMediaInformation, UnknownMediaType):
                 continue
 
     if results.artists:
@@ -530,7 +530,7 @@ async def async_search_media(
                         can_play_artist=can_play_artist,
                     )
                 )
-            except MissingMediaInformation, UnknownMediaType:
+            except (MissingMediaInformation, UnknownMediaType):
                 continue
 
     if results.playlists:
@@ -541,7 +541,7 @@ async def async_search_media(
                         _get_playlist_item_payload(playlist), can_play_artist=False
                     )
                 )
-            except MissingMediaInformation, UnknownMediaType:
+            except (MissingMediaInformation, UnknownMediaType):
                 continue
 
     if results.episodes:
@@ -552,7 +552,7 @@ async def async_search_media(
                         _get_episode_item_payload(episode), can_play_artist=False
                     )
                 )
-            except MissingMediaInformation, UnknownMediaType:
+            except (MissingMediaInformation, UnknownMediaType):
                 continue
 
     return SearchMedia(result=children)
