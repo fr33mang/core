@@ -26,11 +26,13 @@ from homeassistant.components.media_player import (
     MediaPlayerState,
     MediaType,
     RepeatMode,
+    SearchMedia,
+    SearchMediaQuery,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .browse_media import async_browse_media_internal
+from .browse_media import async_browse_media_internal, async_search_media
 from .const import (
     MEDIA_PLAYER_PREFIX,
     MEDIA_TYPE_USER_SAVED_TRACKS,
@@ -53,6 +55,7 @@ SUPPORT_SPOTIFY = (
     | MediaPlayerEntityFeature.PLAY_MEDIA
     | MediaPlayerEntityFeature.PREVIOUS_TRACK
     | MediaPlayerEntityFeature.REPEAT_SET
+    | MediaPlayerEntityFeature.SEARCH_MEDIA
     | MediaPlayerEntityFeature.SEEK
     | MediaPlayerEntityFeature.SELECT_SOURCE
     | MediaPlayerEntityFeature.SHUFFLE_SET
@@ -430,6 +433,11 @@ class SpotifyMediaPlayer(SpotifyEntity, MediaPlayerEntity):
             media_content_type,
             media_content_id,
         )
+
+    @override
+    async def async_search_media(self, query: SearchMediaQuery) -> SearchMedia:
+        """Search Spotify media."""
+        return await async_search_media(self.coordinator.client, query)
 
     @callback
     def _handle_devices_update(self) -> None:

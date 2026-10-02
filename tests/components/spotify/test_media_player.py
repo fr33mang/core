@@ -3,6 +3,7 @@
 from dataclasses import replace
 from datetime import timedelta
 import json
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -15,7 +16,7 @@ from spotifyaio import (
     SpotifyConnectionError,
     SpotifyNotFoundError,
 )
-from spotifyaio.models import Devices
+from spotifyaio.models import Devices, SearchType
 from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.media_player import (
@@ -24,13 +25,17 @@ from homeassistant.components.media_player import (
     ATTR_MEDIA_CONTENT_ID,
     ATTR_MEDIA_CONTENT_TYPE,
     ATTR_MEDIA_ENQUEUE,
+    ATTR_MEDIA_FILTER_CLASSES,
     ATTR_MEDIA_REPEAT,
+    ATTR_MEDIA_SEARCH_QUERY,
     ATTR_MEDIA_SEEK_POSITION,
     ATTR_MEDIA_SHUFFLE,
     ATTR_MEDIA_VOLUME_LEVEL,
     DOMAIN as MEDIA_PLAYER_DOMAIN,
     SERVICE_PLAY_MEDIA,
+    SERVICE_SEARCH_MEDIA,
     SERVICE_SELECT_SOURCE,
+    MediaClass,
     MediaPlayerEnqueue,
     MediaPlayerEntityFeature,
     MediaPlayerState,
@@ -881,3 +886,137 @@ async def test_source_list_is_stable(
 
     assert (state := hass.states.get("media_player.spotify_spotify_1"))
     assert state.attributes[ATTR_INPUT_SOURCE_LIST] == source_list
+
+
+@pytest.mark.usefixtures("setup_credentials")
+async def test_search_media(
+    hass: HomeAssistant,
+    mock_spotify: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Test searching Spotify media."""
+    await setup_integration(hass, mock_config_entry)
+    response = await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        SERVICE_SEARCH_MEDIA,
+        {
+            ATTR_ENTITY_ID: "media_player.spotify_spotify_1",
+            ATTR_MEDIA_SEARCH_QUERY: "test",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert response["media_player.spotify_spotify_1"].as_dict() == snapshot
+
+
+@pytest.mark.usefixtures("setup_credentials")
+@pytest.mark.parametrize(
+    ("service_data", "search_types"),
+    [
+        pytest.param(
+            {},
+            [
+                SearchType.TRACK,
+                SearchType.ARTIST,
+                SearchType.ALBUM,
+                SearchType.PLAYLIST,
+            ],
+            id="default",
+        ),
+        pytest.param(
+            {ATTR_MEDIA_FILTER_CLASSES: [MediaClass.ALBUM]},
+            [SearchType.ALBUM],
+            id="filter_album",
+        ),
+        pytest.param(
+            {ATTR_MEDIA_FILTER_CLASSES: [MediaClass.PODCAST, MediaClass.TRACK]},
+            [SearchType.TRACK, SearchType.SHOW],
+            id="filter_ordered",
+        ),
+        pytest.param(
+            {ATTR_MEDIA_FILTER_CLASSES: [MediaClass.MUSIC]},
+            [
+                SearchType.TRACK,
+                SearchType.ARTIST,
+                SearchType.ALBUM,
+                SearchType.PLAYLIST,
+            ],
+            id="filter_music",
+        ),
+        pytest.param(
+            {ATTR_MEDIA_CONTENT_TYPE: "spotify://album"},
+            [SearchType.ALBUM],
+            id="content_type_prefixed",
+        ),
+        pytest.param(
+            {ATTR_MEDIA_CONTENT_TYPE: MediaType.EPISODE},
+            [SearchType.EPISODE],
+            id="content_type",
+        ),
+        pytest.param(
+            {ATTR_MEDIA_CONTENT_TYPE: "spotify://library"},
+            [
+                SearchType.TRACK,
+                SearchType.ARTIST,
+                SearchType.ALBUM,
+                SearchType.PLAYLIST,
+            ],
+            id="content_type_unknown",
+        ),
+        pytest.param(
+            {
+                ATTR_MEDIA_FILTER_CLASSES: [MediaClass.ARTIST],
+                ATTR_MEDIA_CONTENT_TYPE: MediaType.ALBUM,
+            },
+            [SearchType.ARTIST],
+            id="filter_wins_over_content_type",
+        ),
+    ],
+)
+async def test_search_media_types(
+    hass: HomeAssistant,
+    mock_spotify: MagicMock,
+    mock_config_entry: MockConfigEntry,
+    service_data: dict[str, Any],
+    search_types: list[SearchType],
+) -> None:
+    """Test which Spotify types are searched for."""
+    await setup_integration(hass, mock_config_entry)
+    await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        SERVICE_SEARCH_MEDIA,
+        {
+            ATTR_ENTITY_ID: "media_player.spotify_spotify_1",
+            ATTR_MEDIA_SEARCH_QUERY: "test",
+            **service_data,
+        },
+        blocking=True,
+        return_response=True,
+    )
+    mock_spotify.return_value.search.assert_called_once_with(
+        "test", search_types, limit=10
+    )
+
+
+@pytest.mark.usefixtures("setup_credentials")
+async def test_search_media_unsupported_filter(
+    hass: HomeAssistant,
+    mock_spotify: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test a filter without searchable Spotify types returns nothing."""
+    await setup_integration(hass, mock_config_entry)
+    response = await hass.services.async_call(
+        MEDIA_PLAYER_DOMAIN,
+        SERVICE_SEARCH_MEDIA,
+        {
+            ATTR_ENTITY_ID: "media_player.spotify_spotify_1",
+            ATTR_MEDIA_SEARCH_QUERY: "test",
+            ATTR_MEDIA_FILTER_CLASSES: [MediaClass.VIDEO],
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert response["media_player.spotify_spotify_1"].result == []
+    mock_spotify.return_value.search.assert_not_called()

@@ -18,6 +18,7 @@ from spotifyaio.models import (
     SavedAlbumResponse,
     SavedShowResponse,
     SavedTrackResponse,
+    SearchResult,
     Show,
     ShowEpisodesResponse,
     TopArtistsResponse,
@@ -133,6 +134,7 @@ def mock_spotify() -> Generator[AsyncMock]:
             ("album.json", "get_album", Album),
             ("artist.json", "get_artist", Artist),
             ("show.json", "get_show", Show),
+            ("search.json", "search", SearchResult),
         ):
             getattr(client, method).return_value = obj.from_json(
                 load_fixture(fixture, DOMAIN)

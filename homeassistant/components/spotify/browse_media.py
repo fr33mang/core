@@ -12,7 +12,14 @@ from spotifyaio import (
     SpotifyClient,
     Track,
 )
-from spotifyaio.models import Episode, ItemType, SimplifiedEpisode
+from spotifyaio.models import (
+    Episode,
+    ItemType,
+    SearchType,
+    SimplifiedArtist,
+    SimplifiedEpisode,
+    SimplifiedShow,
+)
 import yarl
 
 from homeassistant.components.media_player import (
@@ -20,6 +27,8 @@ from homeassistant.components.media_player import (
     BrowseMedia,
     MediaClass,
     MediaType,
+    SearchMedia,
+    SearchMediaQuery,
 )
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -34,6 +43,42 @@ from .const import (
 from .util import fetch_image_url
 
 BROWSE_LIMIT = 48
+# Spotify returns at most 10 results per type for apps in development mode
+SEARCH_LIMIT = 10
+
+SEARCH_TYPE_ORDER = [
+    SearchType.TRACK,
+    SearchType.ARTIST,
+    SearchType.ALBUM,
+    SearchType.PLAYLIST,
+    SearchType.SHOW,
+    SearchType.EPISODE,
+]
+DEFAULT_SEARCH_TYPES = [
+    SearchType.TRACK,
+    SearchType.ARTIST,
+    SearchType.ALBUM,
+    SearchType.PLAYLIST,
+]
+MEDIA_CLASS_SEARCH_TYPES: dict[str, list[SearchType]] = {
+    MediaClass.MUSIC: DEFAULT_SEARCH_TYPES,
+    MediaClass.TRACK: [SearchType.TRACK],
+    MediaClass.ARTIST: [SearchType.ARTIST],
+    MediaClass.ALBUM: [SearchType.ALBUM],
+    MediaClass.PLAYLIST: [SearchType.PLAYLIST],
+    MediaClass.PODCAST: [SearchType.SHOW],
+    MediaClass.EPISODE: [SearchType.EPISODE],
+}
+MEDIA_TYPE_SEARCH_TYPES: dict[str, list[SearchType]] = {
+    MediaType.MUSIC: DEFAULT_SEARCH_TYPES,
+    MediaType.TRACK: [SearchType.TRACK],
+    MediaType.ARTIST: [SearchType.ARTIST],
+    MediaType.ALBUM: [SearchType.ALBUM],
+    MediaType.PLAYLIST: [SearchType.PLAYLIST],
+    MediaType.PODCAST: [SearchType.SHOW],
+    MEDIA_TYPE_SHOW: [SearchType.SHOW],
+    MediaType.EPISODE: [SearchType.EPISODE],
+}
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,13 +94,15 @@ class ItemPayload(TypedDict):
     thumbnail: str | None
 
 
-def _get_artist_item_payload(artist: Artist) -> ItemPayload:
+def _get_artist_item_payload(artist: SimplifiedArtist) -> ItemPayload:
     return {
         "id": artist.artist_id,
         "name": artist.name,
         "type": MediaType.ARTIST,
         "uri": artist.uri,
-        "thumbnail": fetch_image_url(artist.images),
+        "thumbnail": (
+            fetch_image_url(artist.images) if isinstance(artist, Artist) else None
+        ),
     }
 
 
@@ -92,6 +139,16 @@ def _get_track_item_payload(
             if show_thumbnails and isinstance(track, Track)
             else None
         ),
+    }
+
+
+def _get_show_item_payload(show: SimplifiedShow) -> ItemPayload:
+    return {
+        "id": show.show_id,
+        "name": show.name,
+        "type": MEDIA_TYPE_SHOW,
+        "uri": show.uri,
+        "thumbnail": fetch_image_url(show.images),
     }
 
 
@@ -328,14 +385,7 @@ async def build_item_response(  # noqa: C901
     elif media_content_type == BrowsableMedia.CURRENT_USER_SAVED_SHOWS:
         if saved_shows := await spotify.get_saved_shows():
             items = [
-                {
-                    "id": saved_show.show.show_id,
-                    "name": saved_show.show.name,
-                    "type": MEDIA_TYPE_SHOW,
-                    "uri": saved_show.show.uri,
-                    "thumbnail": fetch_image_url(saved_show.show.images),
-                }
-                for saved_show in saved_shows
+                _get_show_item_payload(saved_show.show) for saved_show in saved_shows
             ]
     elif media_content_type == BrowsableMedia.CURRENT_USER_RECENTLY_PLAYED:
         if recently_played_tracks := await spotify.get_recently_played_tracks():
@@ -456,6 +506,53 @@ def item_payload(item: ItemPayload, *, can_play_artist: bool) -> BrowseMedia:
         media_content_type=f"{MEDIA_PLAYER_PREFIX}{media_type}",
         title=item["name"],
         thumbnail=item["thumbnail"],
+    )
+
+
+def _get_search_types(query: SearchMediaQuery) -> list[SearchType]:
+    """Return the Spotify types to search for.
+
+    An explicit filter that maps to nothing searchable yields no types.
+    """
+    if query.media_filter_classes:
+        requested = {
+            search_type
+            for media_class in query.media_filter_classes
+            for search_type in MEDIA_CLASS_SEARCH_TYPES.get(media_class, [])
+        }
+        return [
+            search_type for search_type in SEARCH_TYPE_ORDER if search_type in requested
+        ]
+    if query.media_content_type and (
+        search_types := MEDIA_TYPE_SEARCH_TYPES.get(
+            query.media_content_type.removeprefix(MEDIA_PLAYER_PREFIX)
+        )
+    ):
+        return search_types
+    return DEFAULT_SEARCH_TYPES
+
+
+async def async_search_media(
+    spotify: SpotifyClient,
+    query: SearchMediaQuery,
+) -> SearchMedia:
+    """Search Spotify media."""
+    if not (search_types := _get_search_types(query)):
+        return SearchMedia(result=[])
+
+    results = await spotify.search(query.search_query, search_types, limit=SEARCH_LIMIT)
+
+    items: list[ItemPayload] = [
+        *(_get_track_item_payload(track) for track in results.tracks or []),
+        *(_get_artist_item_payload(artist) for artist in results.artists or []),
+        *(_get_album_item_payload(album) for album in results.albums or []),
+        *(_get_playlist_item_payload(playlist) for playlist in results.playlists or []),
+        *(_get_show_item_payload(show) for show in results.shows or []),
+        *(_get_episode_item_payload(episode) for episode in results.episodes or []),
+    ]
+
+    return SearchMedia(
+        result=[item_payload(item, can_play_artist=True) for item in items]
     )
 
 
